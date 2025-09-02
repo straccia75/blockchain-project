@@ -24,8 +24,8 @@ if not ETHERSCAN_API_KEY:
     log.error("ETHERSCAN_API_KEY no configurada. Defínela en las variables de entorno.")
 
 INCLUDE_MNEMONIC = True  # en prod ponlo False
-REQUEST_TIMEOUT = 90
-RATE_SLEEP_SECONDS = 0.25
+REQUEST_TIMEOUT = 60
+RATE_SLEEP_SECONDS = 1.0
 
 # Mapeo de tokens a sus direcciones de contrato
 # Nota: La V2 simplifica esto al usar un solo endpoint,
