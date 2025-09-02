@@ -3,9 +3,5 @@ requests
 gunicorn
 mnemonic
 eth_utils
-time
-logging
-os
 eth_account
-dotenv
-typing
+python-dotenv
