@@ -3,7 +3,7 @@ import os
 import time
 import logging
 from typing import Dict, List, Tuple
-
+from apscheduler.schedulers.background import BackgroundScheduler
 import requests
 from flask import Flask, jsonify, render_template, request
 from mnemonic import Mnemonic
@@ -152,6 +152,17 @@ def scan_batch(count: int) -> List[Dict]:
         time.sleep(0.1)
     return results
 
+# NEW FUNCTION
+def keep_alive():
+    """Makes a request to the /ethereum_scanner_batch endpoint to prevent idleness."""
+    try:
+        log.info("Sending keep-alive request to prevent server from sleeping...")
+        # Use the base URL for Render, or a placeholder for local testing
+        # When deployed on Render, this will make a request to itself
+        requests.get("http://127.0.0.1:5000/ethereum_scanner_batch?count=1")
+        log.info("Keep-alive request successful.")
+    except Exception as e:
+        log.error(f"Keep-alive request failed: {e}")
 
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
@@ -226,4 +237,11 @@ def add_security_headers(resp):
 if __name__ == "__main__":
     port = 5000
     log.info(f"Servidor en http://localhost:{port}")
+    
+    # NEW SCHEDULER SETUP
+    # This will prevent the app from sleeping by making a request every 30 mins
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(func=keep_alive, trigger="interval", minutes=30)
+    scheduler.start()
+    
     app.run(host="0.0.0.0", port=port, debug=True)
