@@ -197,6 +197,11 @@ def ethereum_scanner():
         log.exception("Error interno del servidor")
         return jsonify({"error": "Error interno del servidor", "details": str(e)}), 500
     
+@app.route('/health')
+def health_check():
+    return 'OK', 200
+
+    
 @app.after_request
 def add_security_headers(resp):
     # Evita que navegadores/CDN almacenen la respuesta
