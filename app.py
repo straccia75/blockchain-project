@@ -26,7 +26,7 @@ if not ETHERSCAN_API_KEY:
 
 INCLUDE_MNEMONIC = True  # en prod ponlo False
 
-REQUEST_TIMEOUT = 15
+REQUEST_TIMEOUT = 90
 RATE_SLEEP_SECONDS = 0.22  # ~4.5 req/s (free tier)
 
 TOKENS: Dict[str, Tuple[str, int]] = {
