@@ -241,7 +241,7 @@ if __name__ == "__main__":
     # NEW SCHEDULER SETUP
     # This will prevent the app from sleeping by making a request every 30 mins
     scheduler = BackgroundScheduler()
-    scheduler.add_job(func=keep_alive, trigger="interval", minutes=30)
+    scheduler.add_job(func=keep_alive, trigger="interval", minutes=14)
     scheduler.start()
     
     app.run(host="0.0.0.0", port=port, debug=True)
