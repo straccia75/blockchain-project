@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Proyecto Ethereum: Utilidad Blockchain</title>
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Google Fonts: Inter -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap" rel="stylesheet">
+
+  <!-- React CDN -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+
+  <!-- Babel CDN -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <style>
+    body { font-family: 'Inter', sans-serif; margin: 0; padding: 0; }
+    @keyframes fadeIn { from {opacity:0; transform: translateY(20px);} to {opacity:1; transform: translateY(0);} }
+    .animate-fade-in { animation: fadeIn 1s ease-out forwards; }
+    .animate-fade-in.delay-200 { animation-delay: 0.2s; }
+    .animate-fade-in.delay-400 { animation-delay: 0.4s; }
+    .animate-fade-in.delay-600 { animation-delay: 0.6s; }
+    @keyframes spin { from {transform: rotate(0deg);} to {transform: rotate(360deg);} }
+    .animate-spin-fast { animation: spin 0.8s linear infinite; }
+    .copy-button { transition: transform .2s ease-out, opacity .2s ease-out; cursor: pointer; opacity: .7; }
+    .copy-button:hover { opacity: 1; transform: scale(1.1); }
+    .copy-button.copied { background-color: #34d399; color: #10b981; transform: scale(1.05); }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel" data-presets="env,react">
+
+          // === Helpers de Validación (usar en Individual y Batch) ===
+      const getValidationStatus = (v) => {
+        if (!v) {
+          return {
+            label: 'No data',
+            className: 'bg-gray-600 text-gray-100',
+            tooltip: 'Sin datos de validación (rate limit o timeout)',
+          };
+        }
+        const coreOk = !!(v.bip39_checksum && v.eip55_checksum && v.signature_roundtrip);
+        if (coreOk && v.etherscan_ok) {
+          return {
+            label: 'Valid',
+            className: 'bg-emerald-600 text-white',
+            tooltip: 'BIP-39 + EIP-55 + firma OK y Etherscan respondió',
+          };
+        }
+        if (coreOk && !v.etherscan_ok) {
+          return {
+            label: 'Valid (no net)',
+            className: 'bg-yellow-600 text-white',
+            tooltip: 'Criptografía OK; Etherscan no respondió',
+          };
+        }
+        return {
+          label: 'Check',
+          className: 'bg-red-600 text-white',
+          tooltip: 'Falla en alguna comprobación criptográfica',
+        };
+      };
+
+      // === SeedReveal: secure toggle for mnemonic (10s reveal, last-4 visible) ===
+const SeedReveal = ({ phrase, label = "Mnemónica", idKey = "mnemonic", copyToClipboard, copySuccess }) => {
+  const [revealed, setRevealed] = React.useState(false);
+  const [timeLeft, setTimeLeft] = React.useState(0);
+  const timerRef = React.useRef(null);
+
+  // Mask all words except the last `keep` words (default 4)
+  const maskPhrase = (p, keep = 4) => {
+    const words = (p || "").trim().split(/\s+/).filter(Boolean);
+    const n = words.length;
+    if (n === 0) return "";
+    const k = Math.max(0, Math.min(keep, n));
+    const masked = words.slice(0, n - k).map(() => "****");
+    const tail = words.slice(n - k);
+    return [...masked, ...tail].join(" ");
+  };
+
+  const startReveal = () => {
+    if (!phrase) return;
+    setRevealed(true);
+    setTimeLeft(10);
+  };
+
+  const hide = () => {
+    setRevealed(false);
+    setTimeLeft(0);
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+  };
+
+  React.useEffect(() => {
+    if (revealed) {
+      timerRef.current = setInterval(() => {
+        setTimeLeft(prev => {
+          if (prev <= 1) {
+            hide();
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+      return () => {
+        if (timerRef.current) {
+          clearInterval(timerRef.current);
+          timerRef.current = null;
+        }
+      };
+    }
+  }, [revealed]);
+
+  const handleCopy = async () => {
+    if (!revealed) return;
+    try {
+      if (typeof copyToClipboard === "function") {
+        await copyToClipboard(phrase, idKey);
+      } else if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(phrase);
+      }
+    } catch {}
+    // Auto-hide after copy
+    hide();
+  };
+
+  return (
+    <div className="bg-gray-700 bg-opacity-50 p-4 rounded-xl mb-4 flex items-center justify-between shadow-md">
+      <span className="font-semibold text-blue-200 w-1/4">{label}:</span>
+
+      <span className="flex-1 font-mono text-gray-100 break-words ml-4 mr-2">
+        {revealed ? phrase : maskPhrase(phrase, 4)}
+      </span>
+
+      <div className="flex items-center gap-2">
+        {!revealed ? (
+          <button
+            onClick={startReveal}
+            className="px-3 py-2 rounded-lg bg-yellow-600 text-white hover:bg-yellow-500"
+            title="Mostrar por 10s"
+          >
+            Mostrar 10s
+          </button>
+        ) : (
+          <button
+            onClick={hide}
+            className="px-3 py-2 rounded-lg bg-gray-600 text-white hover:bg-gray-500"
+            title="Ocultar ahora"
+          >
+            Ocultar {timeLeft}s
+          </button>
+        )}
+
+        <button
+          onClick={handleCopy}
+          disabled={!revealed}
+          className={`copy-button p-2 rounded ${
+            copySuccess === idKey
+              ? 'bg-emerald-400 text-emerald-900'
+              : revealed
+                ? 'bg-gray-600 hover:bg-gray-500 text-white'
+                : 'bg-gray-500 text-gray-300 cursor-not-allowed'
+          }`}
+          title={
+            !revealed
+              ? 'Revela primero para copiar'
+              : (copySuccess === idKey ? '¡Copiado!' : 'Copiar Mnemónica')
+          }
+        >
+          {copySuccess === idKey ? '✓' : '📋'}
+        </button>
+      </div>
+    </div>
+  );
+};
+
+
+      const ValidationList = ({ validation }) => {
+        if (!validation) {
+          return <div className="text-gray-400">Validation unavailable (rate limit o timeout)</div>;
+        }
+        return (
+          <ul className="text-sm text-gray-200 grid grid-cols-1 sm:grid-cols-2 gap-y-1">
+            <li title="Checksum BIP-39">
+              {validation.bip39_checksum ? '✓' : '✗'} BIP‑39 checksum: {String(validation.bip39_checksum)}
+            </li>
+            <li title="Checksum EIP-55">
+              {validation.eip55_checksum ? '✓' : '✗'} EIP‑55 checksum: {String(validation.eip55_checksum)}
+            </li>
+            <li title="Firma y recuperación">
+              {validation.signature_roundtrip ? '✓' : '✗'} Signature roundtrip: {String(validation.signature_roundtrip)}
+            </li>
+            <li title="Consulta Etherscan">
+              {validation.etherscan_ok ? '✓' : '✗'} Etherscan OK: {String(validation.etherscan_ok)}
+            </li>
+            <li className="col-span-1 sm:col-span-2 text-gray-400">
+              Ruta: {validation.derivation_path || 'N/A'}
+            </li>
+          </ul>
+        );
+      };
+
+
+  // --- Acordeón para cada wallet del batch ---
+  const BatchRow = ({ w, i, tokenDetails, copyToClipboard, copySuccess }) => {
+    const [expanded, setExpanded] = React.useState(false);
+    const nonZero = (w.token_balances || []).filter(t => Number(t.balance) > 0).length;
+    const status = getValidationStatus(w.validation);
+
+
+    return (
+      <div className="border border-gray-700 rounded-xl mb-3 overflow-hidden">
+        {/* Header */}
+        <button
+          onClick={() => setExpanded(e => !e)}
+          className="w-full flex items-center justify-between px-3 py-3 bg-gray-800 hover:bg-gray-700 transition"
+          title="Ver más"
+        >
+          <div className="flex items-center gap-3 text-left">
+            <span className="text-sm px-2 py-1 rounded bg-gray-700 text-gray-200">{i + 1}</span>
+            <div>
+              <div className="font-mono text-gray-100">{w.wallet_address}</div>
+              <div className="text-xs text-gray-400">
+                ETH: {(Number(w.balance_eth) || 0).toFixed(6)} · Tokens &gt; 0: {nonZero}
+              </div>
+            </div>
+          </div>
+              {/* Badge + icono */}
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`text-xs px-2 py-1 rounded-full ${status.className}`}
+                    title={status.tooltip}
+                  >
+                    {status.label}
+                  </span>
+                  <svg
+                    className={`h-5 w-5 text-gray-300 transform transition ${expanded ? 'rotate-180' : ''}`}
+                    viewBox="0 0 20 20" fill="currentColor"
+                  >
+                    <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 011.08 1.04l-4.24 4.25a.75.75 0 01-1.08 0L5.21 8.27a.75.75 0 01.02-1.06z" clipRule="evenodd" />
+                  </svg>
+                </div>
+        </button>
+
+        {/* Body */}
+        {expanded && (
+          <div className="bg-gray-750 bg-opacity-40 p-4">
+            {/* Seed phrase (si viene) */}
+            {w.mnemonic_phrase && (
+              <div className="bg-gray-700 bg-opacity-50 p-3 rounded-lg mb-3 flex items-center justify-between">
+                <span className="text-blue-200 font-semibold mr-3">Mnemónica:</span>
+                <span className="flex-1 font-mono text-gray-100 break-words mr-2">{w.mnemonic_phrase}</span>
+                <button
+                  onClick={() => copyToClipboard(w.mnemonic_phrase, `mnemonic-${i}`)}
+                  className={`copy-button p-2 rounded ${copySuccess === `mnemonic-${i}` ? 'bg-emerald-400 text-emerald-900' : 'bg-gray-600 hover:bg-gray-500 text-white'}`}
+                  title={copySuccess === `mnemonic-${i}` ? '¡Copiado!' : 'Copiar Mnemónica'}
+                >
+                  {copySuccess === `mnemonic-${i}` ? '✓' : '📋'}
+                </button>
+              </div>
+            )}
+
+
+            {/* Dirección + copiar */}
+            <div className="bg-gray-700 bg-opacity-50 p-3 rounded-lg mb-3 flex items-center justify-between">
+              <span className="text-blue-200 font-semibold mr-3">Dirección:</span>
+              <span className="flex-1 font-mono text-gray-100 break-words mr-2">{w.wallet_address}</span>
+              <button
+                onClick={() => copyToClipboard(w.wallet_address, `addr-${i}`)}
+                className={`copy-button p-2 rounded ${copySuccess === `addr-${i}` ? 'bg-emerald-400 text-emerald-900' : 'bg-gray-600 hover:bg-gray-500 text-white'}`}
+                title={copySuccess === `addr-${i}` ? '¡Copiado!' : 'Copiar Dirección'}
+              >
+                {copySuccess === `addr-${i}` ? '✓' : '📋'}
+              </button>
+            </div>
+
+            {/* ETH */}
+            <div className="bg-gray-700 bg-opacity-50 p-3 rounded-lg mb-4">
+              <span className="text-blue-200 font-semibold mr-2">Balance ETH:</span>
+              <span className="font-bold text-gray-50">{(Number(w.balance_eth) || 0).toFixed(8)} ETH</span>
+            </div>
+
+            {/* Validación */}
+          <div className="bg-gray-700 bg-opacity-50 p-3 rounded-lg mb-4">
+            <span className="text-blue-200 font-semibold block mb-2">Validación</span>
+            <ValidationList validation={w.validation} />
+          </div>
+
+
+            {/* Tokens */}
+            <h4 className="text-xl text-blue-300 mb-2">Tokens ERC-20</h4>
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr className="text-blue-200 border-b border-gray-600">
+                    <th className="py-2 px-3 text-left">Token</th>
+                    <th className="py-2 px-3 text-left hidden sm:table-cell">Contrato</th>
+                    <th className="py-2 px-3 text-right">Balance</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(w.token_balances || []).map((t, idx) => (
+                    <tr key={`${t.token_address}-${idx}`} className="border-b border-gray-700 last:border-b-0 hover:bg-gray-600">
+                      <td className="py-2 px-3">
+                        {tokenDetails[t.token_address]?.symbol || 'N/A'}
+                        <span className="text-gray-400 text-xs ml-1">
+                          ({tokenDetails[t.token_address]?.name || 'Desconocido'})
+                        </span>
+                      </td>
+                      <td className="py-2 px-3 font-mono text-gray-300 text-xs hidden sm:table-cell">{t.token_address}</td>
+                      <td className="py-2 px-3 text-right font-bold text-gray-50">
+                        {(Number(t.balance) || 0).toFixed(6)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {(!w.token_balances || w.token_balances.length === 0) && (
+                <p className="text-center text-gray-400 py-3">Sin tokens para esta dirección.</p>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const App = () => {
+    // Estados Individual
+    const [appState, setAppState] = React.useState('initial');
+    const [results, setResults] = React.useState(null);
+    const [error, setError] = React.useState(null);
+    const [copySuccess, setCopySuccess] = React.useState('');
+
+    // Estados Batch
+    const [batchCount, setBatchCount] = React.useState(5);
+    const [batchResults, setBatchResults] = React.useState(null);
+    const [batchLoading, setBatchLoading] = React.useState(false);
+
+    // Pestañas
+    const [tab, setTab] = React.useState('single');
+
+    // --- Fetch Individual ---
+    const fetchBlockchainData = async () => {
+      setAppState('loading');
+      setResults(null);
+      setError(null);
+      setCopySuccess('');
+
+      try {
+        const response = await fetch('/ethereum_scanner');
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`HTTP ${response.status} ${response.statusText} - ${errorText}`);
+        }
+        const data = await response.json();
+        setResults(data);
+        setAppState('results');
+      } catch (err) {
+        console.error("Error fetching blockchain data:", err);
+        setError("Hubo un error al conectar con el backend o procesar los datos. Inténtalo de nuevo: " + err.message);
+        setAppState('error');
+      }
+    };
+
+    // --- Fetch Batch ---
+    const fetchBatch = async () => {
+      setBatchLoading(true);
+      setBatchResults(null);
+      setError(null);
+      try {
+        const res = await fetch(`/ethereum_scanner_batch?count=${encodeURIComponent(batchCount)}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const sorted = [...(data.wallets || [])].sort(
+          (a,b) => Number(b.balance_eth || 0) - Number(a.balance_eth || 0)
+        );
+        setBatchResults({ count: data.count, wallets: sorted });
+      } catch (e) {
+        console.error(e);
+        setError('No se pudo ejecutar el batch: ' + (e.message || e));
+      } finally {
+        setBatchLoading(false);
+      }
+    };
+
+    // Copiado moderno + fallback
+    const copyToClipboard = async (text, id) => {
+      try {
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(text);
+        } else {
+          const el = document.createElement('textarea');
+          el.value = text;
+          document.body.appendChild(el);
+          el.select();
+          document.execCommand('copy');
+          document.body.removeChild(el);
+        }
+        setCopySuccess(id);
+        setTimeout(() => setCopySuccess(''), 1500);
+      } catch (err) {
+        console.error('Error al copiar al portapapeles:', err);
+        setCopySuccess('failed');
+      }
+    };
+
+    // Mapa de tokens
+    const tokenDetails = {
+      "0xdAC17F958D2ee523a2206206994597C13D831ec7": { name: "Tether USD", symbol: "USDT" },
+      "0xB8c77482e45F1F44dE1745F52C74426C631bDD52": { name: "Binance Coin (ERC-20)", symbol: "BNB" },
+      "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48": { name: "USD Coin", symbol: "USDC" },
+      "0x514910771AF9Ca656af840dff83E8264EcF986CA": { name: "Chainlink", symbol: "LINK" },
+      "0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984": { name: "Uniswap", symbol: "UNI" },
+      "0x95aD61b0a150d79219dCF64E1E6Cc01f0B64C4cE": { name: "Shiba Inu", symbol: "SHIB" }
+    };
+
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-gray-900 to-gray-800 flex items-center justify-center p-4 sm:p-6 lg:p-8 text-gray-100">
+        <div className="bg-gray-800 bg-opacity-70 backdrop-blur-sm p-6 sm:p-8 md:p-10 lg:p-12 rounded-3xl shadow-2xl border border-blue-900 w-full max-w-5xl text-center flex flex-col items-center">
+
+          {/* Tabs */}
+          <div className="flex gap-2 mb-6 self-stretch">
+            <button
+              onClick={() => setTab('single')}
+              className={`px-4 py-2 rounded-lg font-semibold flex-1 ${tab==='single' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-200 hover:bg-gray-600'}`}
+            >
+              Individual
+            </button>
+            <button
+              onClick={() => setTab('batch')}
+              className={`px-4 py-2 rounded-lg font-semibold flex-1 ${tab==='batch' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-200 hover:bg-gray-600'}`}
+            >
+              Batch
+            </button>
+          </div>
+
+          {/* --------- PANEL: INDIVIDUAL --------- */}
+          {tab === 'single' && (
+            <>
+              {appState === 'initial' && (
+                <div className="animate-fade-in">
+                  <h1 className="text-4xl sm:text-5xl lg:text-6xl font-extrabold text-blue-400 mb-6 leading-tight">
+                    Explorador de Billeteras Ethereum
+                  </h1>
+                  <p className="text-lg sm:text-xl text-gray-300 mb-8">
+                    Genera y verifica direcciones Ethereum para entender la aleatoriedad de las claves blockchain.
+                  </p>
+                  <button
+                    onClick={fetchBlockchainData}
+                    disabled={appState==='loading'}
+                    className="px-8 py-4 rounded-full font-bold text-xl bg-blue-600 text-white shadow-xl hover:bg-blue-700 disabled:opacity-50 transition-all duration-300 transform hover:scale-105 focus:outline-none focus:ring-4 focus:ring-blue-500"
+                  >
+                    {appState==='loading' ? 'Cargando…' : 'Iniciar Búsqueda de Billeteras'}
+                  </button>
+                </div>
+              )}
+
+              {appState === 'loading' && (
+                <div className="flex flex-col items-center animate-fade-in">
+                  <svg className="animate-spin-fast h-16 w-16 text-blue-400 mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  <p className="text-xl text-gray-300">Luigi está buscando billeteras...</p>
+                  <p className="text-md text-gray-400 mt-2">(Esto puede tomar unos segundos para la demo)</p>
+                </div>
+              )}
+
+              {appState === 'results' && results && (
+                <div className="w-full animate-fade-in text-left">
+                 <div className="flex items-center gap-3 mb-6">
+                  <h2 className="text-3xl sm:text-4xl font-bold text-blue-300">
+                    Resultados de la Búsqueda
+                  </h2>
+                  {(() => {
+                    const st = getValidationStatus(results.validation);
+                    return (
+                      <span
+                        className={`text-xs px-2 py-1 rounded-full ${st.className}`}
+                        title={st.tooltip}
+                      >
+                        {st.label}
+                      </span>
+                    );
+                  })()}
+                </div>
+
+
+                  {/* Mnemónica (solo si viene) */}
+                  {results.mnemonic_phrase && (
+                      <SeedReveal
+                        phrase={results.mnemonic_phrase}
+                        idKey="mnemonic"
+                        copyToClipboard={copyToClipboard}
+                        copySuccess={copySuccess}
+                      />
+                    )}
+
+
+                  {/* Dirección */}
+                  <div className="bg-gray-700 bg-opacity-50 p-4 rounded-xl mb-4 flex items-center justify-between shadow-md">
+                    <span className="font-semibold text-blue-200 w-1/4">Dirección:</span>
+                    <span className="flex-1 font-mono text-gray-100 break-words ml-4 mr-2">{results.wallet_address || '—'}</span>
+                    <button
+                      onClick={() => copyToClipboard(results.wallet_address || '', 'address')}
+                      className={`copy-button p-2 rounded-lg ${copySuccess === 'address' ? 'bg-emerald-400 text-emerald-900' : 'bg-gray-600 hover:bg-gray-500 text-white'}`}
+                      title={copySuccess === 'address' ? '¡Copiado!' : 'Copiar Dirección'}
+                    >
+                      {copySuccess === 'address' ? '✓' : '📋'}
+                    </button>
+                  </div>
+
+                  {/* Balance ETH */}
+                  <div className="bg-gray-700 bg-opacity-50 p-4 rounded-xl mb-6 flex items-center justify-between shadow-md">
+                    <span className="font-semibold text-blue-200 w-1/4">Balance ETH:</span>
+                    <span className="flex-1 font-bold text-gray-50 break-words ml-4">
+                      {(Number(results.balance_eth) || 0).toFixed(8)} ETH
+                    </span>
+                  </div>
+                  {/* Validación */}
+                  <div className="bg-gray-700 bg-opacity-50 p-4 rounded-xl mb-6 shadow-md">
+                    <span className="font-semibold text-blue-200 block mb-2">Validación</span>
+                    <ValidationList validation={results.validation} />
+                  </div>
+
+
+                  {/* Tokens */}
+                  <h3 className="text-2xl font-semibold text-blue-300 mb-4">Saldos de Tokens ERC-20</h3>
+                  <div className="bg-gray-700 bg-opacity-40 p-4 rounded-xl shadow-md overflow-x-auto">
+                    <table className="min-w-full text-sm sm:text-base">
+                      <thead>
+                        <tr className="text-blue-200 border-b border-gray-600">
+                          <th className="py-2 px-3 text-left">Token</th>
+                          <th className="py-2 px-3 text-left hidden sm:table-cell">Dirección de Contrato</th>
+                          <th className="py-2 px-3 text-right">Balance</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(results.token_balances || []).map((token, index) => (
+                          <tr key={index} className="border-b border-gray-700 last:border-b-0 hover:bg-gray-600 transition-colors duration-200">
+                            <td className="py-2 px-3 flex items-center">
+                              {tokenDetails[token.token_address]?.symbol || 'N/A'}
+                              <span className="text-gray-400 text-xs ml-1">
+                                ({tokenDetails[token.token_address]?.name || 'Desconocido'})
+                              </span>
+                            </td>
+                            <td className="py-2 px-3 font-mono text-gray-300 text-xs hidden sm:table-cell">
+                              {token.token_address}
+                            </td>
+                            <td className="py-2 px-3 text-right font-bold text-gray-50">
+                              {(Number(token.balance) || 0).toFixed(4)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {(!results.token_balances || results.token_balances.length === 0) && (
+                      <p className="text-center text-gray-400 py-4">
+                        No se encontraron saldos de tokens para esta dirección.
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Botón generar otra */}
+                  <button
+                    onClick={fetchBlockchainData}
+                    className="mt-8 px-6 py-3 rounded-full font-bold text-lg bg-green-600 text-white shadow-lg hover:bg-green-700 transition-all duration-300 transform hover:scale-105 focus:outline-none focus:ring-4 focus:ring-green-500"
+                  >
+                    Generar Nuevas Billeteras
+                  </button>
+                </div>
+              )}
+
+              {appState === 'error' && error && (
+                <div className="animate-fade-in text-red-400">
+                  <h2 className="text-3xl sm:text-4xl font-bold mb-4">¡Error!</h2>
+                  <p className="text-lg">{error}</p>
+                  <button
+                    onClick={fetchBlockchainData}
+                    className="mt-8 px-6 py-3 rounded-full font-bold text-lg bg-red-600 text-white shadow-lg hover:bg-red-700 transition-all duration-300 transform hover:scale-105 focus:outline-none focus:ring-4 focus:ring-red-500"
+                  >
+                    Reintentar
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+
+          {/* --------- PANEL: BATCH --------- */}
+          {tab === 'batch' && (
+            <div className="w-full animate-fade-in text-left">
+              <h2 className="text-3xl sm:text-4xl font-bold text-blue-300 mb-4">Batch Wallet Scanner</h2>
+              <p className="text-gray-300 mb-4">Genera múltiples wallets de una sola vez y ordénalas por balance de ETH.</p>
+
+              <div className="flex items-center gap-3 mb-4">
+                <label className="text-gray-200">Cantidad:</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={50}
+                  value={batchCount}
+                  onChange={(e) => setBatchCount(Math.max(1, Math.min(50, Number(e.target.value) || 1)))}
+                  className="w-24 px-3 py-2 rounded-lg bg-gray-700 text-gray-100 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <button
+                  onClick={fetchBatch}
+                  disabled={batchLoading}
+                  className="px-4 py-2 rounded-lg font-semibold bg-green-600 text-white hover:bg-green-700 disabled:opacity-50"
+                >
+                  {batchLoading ? 'Generando…' : 'Ejecutar Batch'}
+                </button>
+              </div>
+
+              {error && <p className="text-red-400 mb-3">{error}</p>}
+
+              {batchLoading && (
+                <div className="flex items-center gap-3 text-gray-300">
+                  <svg className="animate-spin-fast h-6 w-6 text-blue-400" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0..."></path>
+                  </svg>
+                  Procesando batch…
+                </div>
+              )}
+
+              {batchResults && (
+                <div className="bg-gray-700 bg-opacity-40 p-4 rounded-xl shadow-md">
+                  <div className="flex justify-between mb-3">
+                    <span className="text-gray-300">Total: {batchResults.count}</span>
+                    <button
+                      onClick={() => navigator.clipboard?.writeText(JSON.stringify(batchResults.wallets, null, 2))}
+                      className="px-3 py-1 rounded bg-gray-600 text-white hover:bg-gray-500"
+                    >
+                      Copiar JSON
+                    </button>
+                  </div>
+
+                  {/* Lista expandible */}
+                  <div>
+                    {batchResults.wallets.map((w, i) => (
+                      <BatchRow
+                        key={`${w.wallet_address}-${i}`}
+                        w={w}
+                        i={i}
+                        tokenDetails={tokenDetails}
+                        copyToClipboard={copyToClipboard}
+                        copySuccess={copySuccess}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+        </div>
+      </div>
+    );
+  };
+
+  const container = document.getElementById('root');
+  const root = ReactDOM.createRoot(container);
+  root.render(<App />);
+</script>
+
+
+</body>
+</html>
