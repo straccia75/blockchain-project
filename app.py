@@ -193,8 +193,19 @@ def ethereum_scanner():
     except Exception as e:
         log.exception("Error interno del servidor")
         return jsonify({"error": "Error interno del servidor", "details": str(e)}), 500
+    
+@app.route('/health')
+def health_check():
+    """
+    Returns a JSON response indicating the application is healthy.
+    """
+    return jsonify({
+        "status": "up"
+    })
 
 if __name__ == "__main__":
+
+    
     port = 5000
     log.info(f"Servidor en http://localhost:{port}")
     
