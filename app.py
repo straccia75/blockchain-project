@@ -33,7 +33,6 @@ RATE_SLEEP_SECONDS = 1.0
 # maneja múltiples cadenas. Por ahora, asumimos que todos están en Ethereum.
 TOKENS: Dict[str, Tuple[str, int]] = {
     "USDT": ("0xdAC17F958D2ee523a2206206994597C13D831ec7", 6),
-    "BNB" : ("0xB8c77482e45F1F44dE1745F52C74426C631bDD52", 18),
     "USDC": ("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", 6),
     "LINK": ("0x514910771AF9Ca656af840dff83E8264EcF986CA", 18),
     "UNI" : ("0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984", 18),
@@ -143,7 +142,7 @@ def scan_batch(count: int) -> List[Dict]:
     for i in range(count):
         results.append(scan_one_wallet(include_mnemonic=False))
         if i < count - 1:
-            time.sleep(1.0)
+            time.sleep(2.0)
     return results
 
 def keep_alive():
