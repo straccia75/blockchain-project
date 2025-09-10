@@ -3,6 +3,7 @@ import os
 import time
 import logging
 from typing import Dict, List, Tuple
+from binascii import hexlify
 
 import requests
 from flask import Flask, jsonify, render_template, request
@@ -17,20 +18,19 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("wallet_scanner")
 
 load_dotenv()
- 
+
 ETHERSCAN_API_KEY = os.environ.get("ETHERSCAN_API_KEY", "")
 RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL")
 if not ETHERSCAN_API_KEY:
-    log.error("ETHERSCAN_API_KEY no configurada. Defínela en las variables de entorno.")
+    log.error("ETHERSCAN_API_KEY not set. Define it in your environment variables.")
 
-INCLUDE_MNEMONIC = True  # en prod ponlo False
+# NOTE: In production, set this to False. In the demo it's True to show the seed phrase with timed reveal.
+INCLUDE_MNEMONIC = True
+
 REQUEST_TIMEOUT = 60
 RATE_SLEEP_SECONDS = 1.0
 
-# Mapeo de tokens a sus direcciones de contrato
-# Nota: La V2 simplifica esto al usar un solo endpoint,
-# pero el `chainid` para cada token debe ser considerado si tu app
-# maneja múltiples cadenas. Por ahora, asumimos que todos están en Ethereum.
+# Token map: symbol -> (contract, decimals)
 TOKENS: Dict[str, Tuple[str, int]] = {
     "USDT": ("0xdAC17F958D2ee523a2206206994597C13D831ec7", 6),
     "USDC": ("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", 6),
@@ -42,12 +42,10 @@ TOKENS: Dict[str, Tuple[str, int]] = {
 mnemo = Mnemonic("english")
 Account.enable_unaudited_hdwallet_features()
 
-# Función actualizada para usar la API V2 de Etherscan
+# --- Etherscan V2 helper ---
 def _etherscan_get(params: Dict, chain_id: int = 1) -> Dict:
     base = "https://api.etherscan.io/v2/api"
-    # Aseguramos que el chainid se incluya en los parámetros
     params_with_chain = {**params, "chainid": chain_id, "apikey": ETHERSCAN_API_KEY}
-    
     r = requests.get(base, params=params_with_chain, timeout=REQUEST_TIMEOUT)
     r.raise_for_status()
     data = r.json()
@@ -56,15 +54,17 @@ def _etherscan_get(params: Dict, chain_id: int = 1) -> Dict:
     return data
 
 def _safe_int(x: str) -> int:
-    try: return int(x)
-    except: return 0
+    try:
+        return int(x)
+    except:
+        return 0
 
+# --- Core generator + validation ---
 def generate_and_check_wallet_data(include_mnemonic: bool = False) -> Dict:
     if not ETHERSCAN_API_KEY:
-        return {"error": "ETHERSCAN_API_KEY no configurada."}
+        return {"error": "ETHERSCAN_API_KEY not configured."}
 
     mnemonic_phrase = mnemo.generate(strength=128)
-    bip39_checksum_ok = False
     try:
         bip39_checksum_ok = mnemo.check(mnemonic_phrase)
     except Exception:
@@ -75,7 +75,7 @@ def generate_and_check_wallet_data(include_mnemonic: bool = False) -> Dict:
     address = to_checksum_address(acct.address)
     eip55_checksum_ok = address == to_checksum_address(address)
 
-    signature_roundtrip_ok = False
+    # Signature roundtrip
     try:
         msg_text = f"wallet-proof:{address}"
         msg = encode_defunct(text=msg_text)
@@ -85,6 +85,7 @@ def generate_and_check_wallet_data(include_mnemonic: bool = False) -> Dict:
     except Exception:
         signature_roundtrip_ok = False
 
+    # Balances
     etherscan_ok = True
     balance_eth = 0.0
     try:
@@ -96,20 +97,23 @@ def generate_and_check_wallet_data(include_mnemonic: bool = False) -> Dict:
         })
         balance_eth = _safe_int(eth_data.get("result", "0")) / 1e18
     except Exception as e:
-        logging.warning(f"Fallo balance ETH para {address}: {e}")
+        logging.warning(f"ETH balance failed for {address}: {e}")
         etherscan_ok = False
 
     token_balances: List[Dict] = []
     for symbol, (token_addr, decimals) in TOKENS.items():
         try:
             tok = _etherscan_get({
-                "module": "account", "action": "tokenbalance",
-                "address": address, "contractaddress": token_addr, "tag": "latest"
+                "module": "account",
+                "action": "tokenbalance",
+                "address": address,
+                "contractaddress": token_addr,
+                "tag": "latest"
             })
             raw = _safe_int(tok.get("result", "0"))
             bal = raw / (10**decimals)
         except Exception as e:
-            logging.warning(f"Fallo token {symbol} para {address}: {e}")
+            logging.warning(f"Token {symbol} failed for {address}: {e}")
             bal = 0.0
         token_balances.append({"token_address": token_addr, "balance": bal})
         time.sleep(RATE_SLEEP_SECONDS)
@@ -145,17 +149,91 @@ def scan_batch(count: int) -> List[Dict]:
             time.sleep(2.0)
     return results
 
+# --- Educational Mode derivation steps ---
+def derive_educational_steps(passphrase: str = "", derivation_path: str = "m/44'/60'/0'/0/0") -> Dict:
+    """
+    Generate a 12-word mnemonic and show step-by-step derivation to an Ethereum address.
+    WARNING: For educational/demo use only. Never fund or reuse these secrets.
+    """
+    if not ETHERSCAN_API_KEY:
+        # Not required for this endpoint, but keep logging consistent
+        log.warning("ETHERSCAN_API_KEY missing; proceeding (not required for /educational_mnemonic)")
+
+    # (1) Mnemonic & checksum
+    mnemonic_phrase = mnemo.generate(strength=128)
+    try:
+        bip39_checksum_ok = mnemo.check(mnemonic_phrase)
+    except Exception:
+        bip39_checksum_ok = False
+
+    # (2) Seed derivation (PBKDF2-HMAC-SHA512, 2048 iterations)
+    seed_bytes = mnemo.to_seed(mnemonic_phrase, passphrase=passphrase or "")
+    seed_hex = "0x" + hexlify(seed_bytes).decode()
+
+    # (3) Keys via BIP-44 path
+    acct = Account.from_mnemonic(mnemonic_phrase, account_path=derivation_path)
+    private_key_hex = acct.key.hex()
+    try:
+        pubkey_hex = acct._key_obj.public_key.to_hex()  # uncompressed 0x04...
+    except Exception:
+        pubkey_hex = None
+
+    # (4) Address + EIP-55 checksum
+    address_plain = acct.address
+    address_checksum = to_checksum_address(address_plain)
+    eip55_ok = (address_checksum == to_checksum_address(address_plain))
+
+    # (5) Signature roundtrip demo
+    message_text = f"wallet-proof:{address_checksum}"
+    msg = encode_defunct(text=message_text)
+    signed = acct.sign_message(msg)
+    recovered = Account.recover_message(msg, signature=signed.signature)
+    signature_ok = (to_checksum_address(recovered) == address_checksum)
+
+    return {
+        "mnemonic_phrase": mnemonic_phrase,
+        "bip39": {
+            "checksum_ok": bool(bip39_checksum_ok),
+            "passphrase_used": bool(passphrase),
+        },
+        "seed": {
+            "hex": seed_hex,
+            "bytes_len": len(seed_bytes),
+        },
+        "derivation": {
+            "path": derivation_path,
+            "private_key_hex": private_key_hex,
+            "public_key_hex": pubkey_hex,
+        },
+        "address": {
+            "plain": address_plain,
+            "checksum": address_checksum,
+            "eip55_ok": bool(eip55_ok),
+        },
+        "signature_demo": {
+            "message": message_text,
+            "signature": "0x" + signed.signature.hex(),
+            "recovered_address": recovered,
+            "ok": bool(signature_ok),
+        },
+        "security": {
+            "do_not_reuse": True,
+            "note": "Never fund or reuse educational mnemonics. Values may exist in browser memory.",
+        },
+    }
+
+# --- Keep-alive for hosting ---
 def keep_alive():
     """Makes a request to the /ethereum_scanner_batch endpoint to prevent idleness."""
     try:
-        log.info("Sending keep-alive request to prevent server from sleeping...")
-        
+        log.info("Sending keep-alive request to avoid server sleep...")
         url = RENDER_EXTERNAL_URL or "http://127.0.0.1:5000"
         requests.get(f"{url}/ethereum_scanner_batch?count=1")
         log.info("Keep-alive request successful.")
     except Exception as e:
         log.error(f"Keep-alive request failed: {e}")
 
+# --- Flask app & routes ---
 app = Flask(__name__, template_folder="templates", static_folder="static")
 
 @app.route("/")
@@ -175,42 +253,49 @@ def ethereum_scanner_batch():
         )
         return jsonify({"count": len(data_sorted), "wallets": data_sorted}), 200
     except requests.exceptions.RequestException as net_err:
-        log.exception("Error de red al consultar Etherscan")
-        return jsonify({"error": "Error de red al consultar Etherscan", "details": str(net_err)}), 502
+        log.exception("Network error while querying Etherscan")
+        return jsonify({"error": "Network error while querying Etherscan", "details": str(net_err)}), 502
     except Exception as e:
-        log.exception("Error interno del servidor")
-        return jsonify({"error": "Error interno del servidor", "details": str(e)}), 500
-    
+        log.exception("Internal server error")
+        return jsonify({"error": "Internal server error", "details": str(e)}), 500
+
 @app.route("/ethereum_scanner", methods=["GET"])
 def ethereum_scanner():
     try:
-        data = generate_and_check_wallet_data(include_mnemonic=True)
+        data = generate_and_check_wallet_data(include_mnemonic=INCLUDE_MNEMONIC)
         status = 200 if "error" not in data else 500
         return jsonify(data), status
     except requests.exceptions.RequestException as net_err:
-        log.exception("Error de red al consultar Etherscan")
-        return jsonify({"error": "Error de red al consultar Etherscan", "details": str(net_err)}), 502
+        log.exception("Network error while querying Etherscan")
+        return jsonify({"error": "Network error while querying Etherscan", "details": str(net_err)}), 502
     except Exception as e:
-        log.exception("Error interno del servidor")
-        return jsonify({"error": "Error interno del servidor", "details": str(e)}), 500
-    
+        log.exception("Internal server error")
+        return jsonify({"error": "Internal server error", "details": str(e)}), 500
+
+@app.route("/educational_mnemonic", methods=["GET"])
+def educational_mnemonic():
+    """
+    Returns step-by-step derivation: mnemonic -> seed -> keys -> address (+ signature demo).
+    """
+    try:
+        derivation_path = request.args.get("path", "m/44'/60'/0'/0/0")
+        passphrase = request.args.get("passphrase", "")
+        data = derive_educational_steps(passphrase=passphrase, derivation_path=derivation_path)
+        return jsonify(data), 200
+    except Exception as e:
+        log.exception("Internal error in /educational_mnemonic")
+        return jsonify({"error": "Internal server error", "details": str(e)}), 500
+
 @app.route('/health')
 def health_check():
-    """
-    Returns a JSON response indicating the application is healthy.
-    """
-    return jsonify({
-        "status": "up"
-    })
+    return jsonify({"status": "up"})
 
 if __name__ == "__main__":
-
-    
     port = 5000
-    log.info(f"Servidor en http://localhost:{port}")
-    
+    log.info(f"Server on http://localhost:{port}")
+
     scheduler = BackgroundScheduler()
     scheduler.add_job(func=keep_alive, trigger="interval", minutes=10)
     scheduler.start()
-    
+
     app.run(host="0.0.0.0", port=port, debug=True)
